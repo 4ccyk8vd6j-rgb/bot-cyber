@@ -1,0 +1,15 @@
+{
+  "_comment": "Copiez ce fichier en config/scope.json et n'y mettez QUE des cibles que vous êtes légalement autorisé à tester.",
+  "domains": [
+    "example.com"
+  ],
+  "hosts": [
+    "localhost",
+    "127.0.0.1"
+  ],
+  "cidrs": [
+    "127.0.0.0/8",
+    "10.0.0.0/24"
+  ],
+  "allow_private": false
+}

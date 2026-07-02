@@ -1,0 +1,5 @@
+# CyberBot ne dépend que de la bibliothèque standard de Python 3.9+.
+# Aucune dépendance externe n'est requise pour le fonctionnement de base.
+#
+# Dépendances optionnelles pour le développement :
+#   pytest>=7.0      # exécution de la suite de tests

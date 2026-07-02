@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cyberbot"
+version = "1.0.0"
+description = "Bot d'analyse de sécurité défensive (recon, en-têtes, TLS, dépendances, secrets, CVE)."
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "MIT" }
+authors = [{ name = "bot-cyber" }]
+keywords = ["security", "vulnerability", "scanner", "defensive", "osv", "cve"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+    "Intended Audience :: Information Technology",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+cyberbot = "cyberbot.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["cyberbot*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
