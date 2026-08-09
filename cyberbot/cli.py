@@ -89,8 +89,9 @@ def _run_modules(
 
 
 def _resolve_scope(args) -> Scope:
-    if args.scope:
-        return Scope.load(args.scope)
+    scope_file = getattr(args, "scope", None)
+    if scope_file:
+        return Scope.load(scope_file)
     if getattr(args, "allow_any", False):
         # Autorise tout : réservé aux cibles dont VOUS êtes responsable.
         return Scope(domains=[], hosts=[], cidrs=["0.0.0.0/0", "::/0"], allow_private=True)
@@ -100,11 +101,33 @@ def _resolve_scope(args) -> Scope:
     return Scope.permissive_localhost()
 
 
+def _common_parser() -> argparse.ArgumentParser:
+    """Options globales, partagées entre le parseur principal et les sous-commandes.
+
+    `default=argparse.SUPPRESS` évite qu'une sous-commande n'écrase, avec sa
+    valeur par défaut, une option fournie avant la sous-commande.
+    """
+    c = argparse.ArgumentParser(add_help=False)
+    c.add_argument("-v", "--verbose", action="store_true",
+                   default=argparse.SUPPRESS, help="Sortie détaillée.")
+    c.add_argument("--no-banner", action="store_true",
+                   default=argparse.SUPPRESS, help="Ne pas afficher la bannière.")
+    c.add_argument("--scope", default=argparse.SUPPRESS,
+                   help="Fichier JSON de périmètre autorisé.")
+    c.add_argument("--report-dir", default=argparse.SUPPRESS,
+                   help="Dossier de sortie des rapports (défaut: reports).")
+    c.add_argument("--no-report", action="store_true",
+                   default=argparse.SUPPRESS, help="Ne pas écrire de fichiers de rapport.")
+    return c
+
+
 def build_parser() -> argparse.ArgumentParser:
+    common = _common_parser()
     p = argparse.ArgumentParser(
         prog="cyberbot",
         description="CyberBot — analyse de vulnérabilités et de sécurité (usage autorisé uniquement).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
+        parents=[common],
         epilog=(
             "Exemples :\n"
             "  cyberbot scan example.com --scope config/scope.json\n"
@@ -116,20 +139,12 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument("--version", action="version", version=f"CyberBot {__version__}")
-    p.add_argument("-v", "--verbose", action="store_true", help="Sortie détaillée.")
-    p.add_argument("--no-banner", action="store_true", help="Ne pas afficher la bannière.")
-    p.add_argument("--scope", help="Fichier JSON de périmètre autorisé.")
-    p.add_argument(
-        "--report-dir", default="reports", help="Dossier de sortie des rapports (défaut: reports)."
-    )
-    p.add_argument(
-        "--no-report", action="store_true", help="Ne pas écrire de fichiers de rapport."
-    )
 
     sub = p.add_subparsers(dest="command", required=True)
 
     # scan : lance l'ensemble des modules actifs sur une cible réseau.
-    sp = sub.add_parser("scan", help="Analyse complète d'un hôte (recon + headers + tls).")
+    sp = sub.add_parser("scan", parents=[common],
+                        help="Analyse complète d'un hôte (recon + headers + tls).")
     sp.add_argument("target", help="Hôte, IP ou URL cible (doit être dans le périmètre).")
     sp.add_argument(
         "--allow-any",
@@ -142,25 +157,30 @@ def build_parser() -> argparse.ArgumentParser:
         help="Liste de modules à exécuter (défaut: recon,headers,tls).",
     )
 
-    wp = sub.add_parser("web", help="Analyse des en-têtes/cookies de sécurité HTTP.")
+    wp = sub.add_parser("web", parents=[common],
+                        help="Analyse des en-têtes/cookies de sécurité HTTP.")
     wp.add_argument("target", help="URL ou hôte cible.")
     wp.add_argument("--allow-any", action="store_true", help="Désactive le contrôle de périmètre.")
 
-    tp = sub.add_parser("tls", help="Contrôle de la configuration TLS/certificat.")
+    tp = sub.add_parser("tls", parents=[common],
+                        help="Contrôle de la configuration TLS/certificat.")
     tp.add_argument("target", help="Hôte[:port] cible (443 par défaut).")
     tp.add_argument("--allow-any", action="store_true", help="Désactive le contrôle de périmètre.")
 
-    rp = sub.add_parser("recon", help="Reconnaissance DNS + scan de ports.")
+    rp = sub.add_parser("recon", parents=[common],
+                        help="Reconnaissance DNS + scan de ports.")
     rp.add_argument("target", help="Hôte ou IP cible.")
     rp.add_argument("--allow-any", action="store_true", help="Désactive le contrôle de périmètre.")
 
-    dp = sub.add_parser("deps", help="Audit des dépendances (OSV) d'un projet local.")
+    dp = sub.add_parser("deps", parents=[common],
+                        help="Audit des dépendances (OSV) d'un projet local.")
     dp.add_argument("target", help="Chemin du projet (contenant requirements.txt/package-lock.json).")
 
-    ssp = sub.add_parser("secrets", help="Recherche de secrets codés en dur dans un dossier.")
+    ssp = sub.add_parser("secrets", parents=[common],
+                         help="Recherche de secrets codés en dur dans un dossier.")
     ssp.add_argument("target", help="Chemin du dossier à analyser.")
 
-    cp = sub.add_parser("cve", help="Recherche de CVE via OSV.")
+    cp = sub.add_parser("cve", parents=[common], help="Recherche de CVE via OSV.")
     cp.add_argument("target", help="'ecosystem:nom:version' ou 'CVE-…' / 'GHSA-…'.")
 
     return p
@@ -181,8 +201,13 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    log = Logger(verbose=args.verbose)
-    if not args.no_banner:
+    verbose = getattr(args, "verbose", False)
+    no_banner = getattr(args, "no_banner", False)
+    no_report = getattr(args, "no_report", False)
+    report_dir = getattr(args, "report_dir", None) or "reports"
+
+    log = Logger(verbose=verbose)
+    if not no_banner:
         print(BANNER.format(ver=__version__))
 
     try:
@@ -191,7 +216,7 @@ def main(argv: list[str] | None = None) -> int:
         log.error(str(e))
         return 2
 
-    ctx = Context(logger=log, scope=scope, options={"verbose": args.verbose})
+    ctx = Context(logger=log, scope=scope, options={"verbose": verbose})
 
     if args.command == "scan":
         module_names = [m.strip() for m in args.modules.split(",") if m.strip()]
@@ -211,8 +236,8 @@ def main(argv: list[str] | None = None) -> int:
 
     _print_summary(log, findings)
 
-    if not args.no_report and len(findings):
-        paths = write_all(findings, target, args.report_dir)
+    if not no_report and len(findings):
+        paths = write_all(findings, target, report_dir)
         log.section("Rapports générés")
         for fmt, path in paths.items():
             log.good(f"{fmt:<8}: {path}")
