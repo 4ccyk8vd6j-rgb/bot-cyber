@@ -144,7 +144,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     # scan : lance l'ensemble des modules actifs sur une cible réseau.
     sp = sub.add_parser("scan", parents=[common],
-                        help="Analyse complète d'un hôte (recon + headers + tls).")
+                        help="Analyse complète d'un hôte (tous les modules réseau).")
     sp.add_argument("target", help="Hôte, IP ou URL cible (doit être dans le périmètre).")
     sp.add_argument(
         "--allow-any",
@@ -153,8 +153,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     sp.add_argument(
         "--modules",
-        default="recon,headers,tls",
-        help="Liste de modules à exécuter (défaut: recon,headers,tls).",
+        default="recon,dns,headers,tls,cors,exposure",
+        help="Liste de modules à exécuter (défaut: recon,dns,headers,tls,cors,exposure).",
     )
 
     wp = sub.add_parser("web", parents=[common],
@@ -171,6 +171,24 @@ def build_parser() -> argparse.ArgumentParser:
                         help="Reconnaissance DNS + scan de ports.")
     rp.add_argument("target", help="Hôte ou IP cible.")
     rp.add_argument("--allow-any", action="store_true", help="Désactive le contrôle de périmètre.")
+
+    cop = sub.add_parser("cors", parents=[common],
+                         help="Détection de mauvaises configurations CORS.")
+    cop.add_argument("target", help="URL ou hôte cible.")
+    cop.add_argument("--allow-any", action="store_true", help="Désactive le contrôle de périmètre.")
+
+    ep = sub.add_parser("exposure", parents=[common],
+                        help="Recherche de fichiers sensibles exposés (.git, .env, sauvegardes…).")
+    ep.add_argument("target", help="URL ou hôte cible.")
+    ep.add_argument("--allow-any", action="store_true", help="Désactive le contrôle de périmètre.")
+
+    dnp = sub.add_parser("dns", parents=[common],
+                         help="Audit DNS : SPF, DMARC, CAA et sous-domaines.")
+    dnp.add_argument("target", help="Domaine à auditer.")
+    dnp.add_argument(
+        "--no-subdomains", action="store_true",
+        help="Ne pas tester la liste de sous-domaines usuels.",
+    )
 
     dp = sub.add_parser("deps", parents=[common],
                         help="Audit des dépendances (OSV) d'un projet local.")
@@ -191,6 +209,9 @@ _COMMAND_MAP = {
     "web": (["headers"], True),
     "tls": (["tls"], True),
     "recon": (["recon"], True),
+    "cors": (["cors"], True),
+    "exposure": (["exposure"], True),
+    "dns": (["dns"], False),
     "deps": (["deps"], False),
     "secrets": (["secrets"], False),
     "cve": (["cve"], False),
@@ -216,7 +237,14 @@ def main(argv: list[str] | None = None) -> int:
         log.error(str(e))
         return 2
 
-    ctx = Context(logger=log, scope=scope, options={"verbose": verbose})
+    ctx = Context(
+        logger=log,
+        scope=scope,
+        options={
+            "verbose": verbose,
+            "dns_subdomains": not getattr(args, "no_subdomains", False),
+        },
+    )
 
     if args.command == "scan":
         module_names = [m.strip() for m in args.modules.split(",") if m.strip()]
@@ -226,8 +254,12 @@ def main(argv: list[str] | None = None) -> int:
         if getattr(args, "allow_any", False):
             require_scope = False
 
+    # Distingue « pas de périmètre car analyse passive » de « périmètre désactivé ».
+    has_active = any(m in modules.ACTIVE_MODULES for m in module_names)
     if require_scope:
         log.info("Contrôle de périmètre ACTIF. Seules les cibles autorisées seront analysées.")
+    elif not has_active:
+        log.info("Analyse passive : aucune requête n'est envoyée à la cible.")
     else:
         log.warn("Contrôle de périmètre DÉSACTIVÉ — assurez-vous d'être autorisé sur la cible.")
 

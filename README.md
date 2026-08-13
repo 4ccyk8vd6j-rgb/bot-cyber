@@ -21,14 +21,21 @@ secrets et recherche de CVE — le tout dans un seul outil en ligne de commande,
 | `recon` | actif | Résolution DNS + scan de ports courants (connect TCP) + bannières |
 | `headers` (`web`) | actif | En-têtes de sécurité HTTP manquants, divulgation d'info, attributs de cookies |
 | `tls` | actif | Version TLS négociée, protocoles obsolètes, validité/expiration du certificat |
+| `cors` | actif | Origine reflétée, origine `null`, validation par sous-chaîne, `*` + credentials |
+| `exposure` | actif | Fichiers sensibles exposés (`.git/config`, `.env`, sauvegardes, `phpinfo`…) |
+| `dns` | passif | SPF, DMARC, CAA, serveurs de noms et sous-domaines usuels |
 | `deps` | passif | Audit des dépendances (`requirements.txt`, `package-lock.json`) via l'API OSV |
 | `secrets` | passif | Détection de secrets codés en dur (clés API, tokens, clés privées, entropie) |
 | `cve` | passif | Recherche de vulnérabilités connues (CVE/GHSA) via OSV |
 
-- **Modules actifs** : touchent une cible réseau distante → **soumis au contrôle de périmètre**.
-- **Modules passifs** : n'analysent que des fichiers/données locaux → pas de périmètre requis.
+- **Modules actifs** : envoient des requêtes à la cible → **soumis au contrôle de périmètre**.
+- **Modules passifs** : fichiers locaux ou simples requêtes DNS → pas de périmètre requis.
 - **Rapports** générés automatiquement en **JSON, Markdown et HTML**.
 - **Code de sortie** `1` si au moins un finding *High/Critical* → intégrable en CI.
+- **Secrets masqués dans les rapports** : les preuves d'exposition (`.env`, `.htpasswd`)
+  sont caviardées, pour ne jamais recopier d'identifiants en clair sur disque.
+- **Client DNS interne** (UDP, ~180 lignes) pour interroger TXT/MX/NS/CAA
+  sans dépendance externe.
 
 ---
 
@@ -82,8 +89,11 @@ strictement à vos propres actifs).
 ## 📖 Utilisation
 
 ```bash
-# Analyse complète d'un hôte (recon + headers + tls)
+# Analyse complète (recon + dns + headers + tls + cors + exposure)
 cyberbot scan example.com --scope config/scope.json
+
+# Choisir les modules d'un scan
+cyberbot scan example.com --modules headers,tls,cors
 
 # En-têtes de sécurité HTTP
 cyberbot web https://example.com
@@ -93,6 +103,16 @@ cyberbot tls example.com:443
 
 # Reconnaissance (DNS + ports)
 cyberbot recon 10.0.0.5
+
+# Mauvaises configurations CORS
+cyberbot cors https://api.example.com
+
+# Fichiers sensibles exposés (.git, .env, sauvegardes…)
+cyberbot exposure https://example.com
+
+# Audit DNS : SPF, DMARC, CAA, sous-domaines (passif)
+cyberbot dns example.com
+cyberbot dns example.com --no-subdomains
 
 # Audit des dépendances d'un projet local (OSV)
 cyberbot deps ./mon-projet
@@ -106,7 +126,22 @@ cyberbot cve CVE-2021-44228
 ```
 
 Options globales utiles : `-v/--verbose`, `--no-banner`, `--no-report`,
-`--report-dir DOSSIER`, `--scope FICHIER`.
+`--report-dir DOSSIER`, `--scope FICHIER`. Elles sont acceptées **avant comme
+après** la sous-commande.
+
+### Intégration en CI
+
+Le code de sortie vaut `1` dès qu'un finding *High* ou *Critical* est trouvé,
+ce qui permet de faire échouer un pipeline :
+
+```yaml
+- name: Recherche de secrets codés en dur
+  run: python cyberbot.py --no-banner --no-report secrets .
+```
+
+Le dépôt contient un workflow GitHub Actions (`.github/workflows/ci.yml`) qui
+exécute la suite de tests sur Python 3.9 → 3.12 et fait s'auto-analyser
+CyberBot.
 
 ### Scan rapide tout-en-un
 
@@ -150,8 +185,10 @@ bot-cyber/
 │   │   └── reporter.py      # rapports JSON / Markdown / HTML
 │   ├── modules/             # un module = une capacité d'analyse
 │   │   ├── recon.py  web_headers.py  tls_check.py
+│   │   ├── cors_check.py  exposure.py  dns_audit.py
 │   │   ├── deps_audit.py  secrets_scan.py  cve_lookup.py
-│   └── utils/               # net (urllib/socket/ssl) + logging
+│   └── utils/               # net (urllib/socket/ssl), dns (client UDP), logging
+├── .github/workflows/ci.yml # tests multi-versions + auto-analyse
 ├── config/scope.example.json
 ├── scripts/                 # setup.sh, quick_scan.sh
 └── tests/                   # suite pytest
@@ -178,8 +215,20 @@ puis enregistrez-le dans `cyberbot/modules/__init__.py` (`REGISTRY` +
 Cet outil est **volontairement défensif** : il n'inclut ni exploitation, ni
 déni de service, ni contournement de protections, ni ciblage de masse. Il
 n'automatise que des vérifications de configuration et de vulnérabilités
-connues. Vous êtes seul responsable du respect des lois applicables et de
-l'obtention des autorisations nécessaires avant toute analyse.
+connues.
+
+Choix de conception explicites :
+
+- le module `exposure` **n'est pas un fuzzer** : liste de chemins courte et
+  curatée, requêtes espacées, et détection des faux positifs (soft-404) ;
+- le module `cors` **observe** les en-têtes de réponse, sans jamais exploiter
+  la faiblesse détectée ;
+- le module `dns` teste une **courte liste** de sous-domaines usuels par
+  résolution simple, sans brute force ;
+- les secrets trouvés sont **masqués** dans les rapports.
+
+Vous êtes seul responsable du respect des lois applicables et de l'obtention
+des autorisations nécessaires avant toute analyse.
 
 ## 📄 Licence
 
