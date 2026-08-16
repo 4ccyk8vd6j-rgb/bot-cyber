@@ -99,6 +99,39 @@ def test_exposure_detects_env_and_redacts_secret():
     assert "«masqué»" in env[0].evidence
 
 
+def test_resolve_base_url_falls_back_to_http(plain_server):
+    """Une cible sans schéma servie en HTTP clair doit être atteinte."""
+    from cyberbot.utils.net import resolve_base_url
+
+    host_port = plain_server.removeprefix("http://")
+    assert resolve_base_url(host_port, timeout=3) == f"http://{host_port}"
+
+
+def test_resolve_base_url_keeps_explicit_scheme():
+    from cyberbot.utils.net import resolve_base_url
+
+    assert resolve_base_url("https://example.com/x") == "https://example.com/x"
+
+
+def test_resolve_base_url_rejects_bad_scheme():
+    from cyberbot.utils.net import UnsafeRequestError, resolve_base_url
+
+    with pytest.raises(UnsafeRequestError):
+        resolve_base_url("file:///etc/passwd")
+
+
+def test_exposure_finds_files_on_plain_http_target():
+    """Régression : une cible 'hôte:port' en HTTP ne doit pas être déclarée injoignable."""
+    routes = {"/.git/config": b"[core]\n\trepositoryformatversion = 0\n"}
+    server, url = _serve(routes)
+    host_port = url.removeprefix("http://")
+    try:
+        findings = exposure.run(host_port, _Ctx({"exposure_delay": 0}))
+    finally:
+        server.shutdown()
+    assert any(".git/config" in f.target for f in findings)
+
+
 def test_exposure_soft404_is_inconclusive():
     """Un serveur qui répond 200 à tout doit produire un résultat non concluant."""
 

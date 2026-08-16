@@ -164,11 +164,36 @@ informations sensibles.
 
 ---
 
+## 🔐 Robustesse de l'outil lui-même
+
+Un scanner traite des données fournies par des systèmes hostiles. CyberBot
+considère comme non fiables les réponses HTTP, bannières, réponses DNS et
+fichiers analysés. Les protections en place :
+
+- **Périmètre réévalué à chaque redirection HTTP** — une cible autorisée ne
+  peut pas rediriger l'analyse vers un hôte interdit (métadonnées cloud,
+  réseau interne) ;
+- **Schémas d'URL restreints à http/https** — pas de lecture locale via
+  `file://` ;
+- **Assainissement systématique** des séquences ANSI et caractères de
+  contrôle, au point de passage unique qu'est le modèle `Finding` ;
+- **Liens de rapport filtrés** (`javascript:`, `data:` rejetés) et rapport
+  HTML sous `Content-Security-Policy: default-src 'none'` ;
+- **Rapports en `0600`**, dossier en `0700` ;
+- **Client DNS durci** : socket connectée, vérification de l'ID de
+  transaction et de l'écho de la question.
+
+Le détail, les limites connues et la procédure de signalement sont dans
+[SECURITY.md](SECURITY.md).
+
 ## 🧪 Tests
 
 ```bash
 python3 -m pytest -q
 ```
+
+La suite compte 82 tests, dont `tests/test_security.py` qui verrouille
+chaque correctif de sécurité : ces tests échouent si un garde-fou est retiré.
 
 ---
 
@@ -187,7 +212,8 @@ bot-cyber/
 │   │   ├── recon.py  web_headers.py  tls_check.py
 │   │   ├── cors_check.py  exposure.py  dns_audit.py
 │   │   ├── deps_audit.py  secrets_scan.py  cve_lookup.py
-│   └── utils/               # net (urllib/socket/ssl), dns (client UDP), logging
+│   └── utils/               # net (HTTP durci), dns (client UDP), sanitize, logging
+├── SECURITY.md              # modèle de menace et limites connues
 ├── .github/workflows/ci.yml # tests multi-versions + auto-analyse
 ├── config/scope.example.json
 ├── scripts/                 # setup.sh, quick_scan.sh

@@ -130,6 +130,7 @@ def query(
     record: str = "A",
     resolver: str | None = None,
     timeout: float = 3.0,
+    port: int = 53,
 ) -> list[str]:
     """Interroge le DNS et retourne les valeurs de la section réponse.
 
@@ -152,8 +153,12 @@ def query(
             family = socket.AF_INET6 if ":" in server else socket.AF_INET
             with socket.socket(family, socket.SOCK_DGRAM) as sock:
                 sock.settimeout(timeout)
-                sock.sendto(packet, (server, 53))
-                data, _ = sock.recvfrom(4096)
+                # connect() fait filtrer par le noyau les datagrammes dont la
+                # source n'est pas le résolveur : sans cela, n'importe quel
+                # hôte pourrait injecter une réponse forgée sur notre port.
+                sock.connect((server, port))
+                sock.send(packet)
+                data = sock.recv(4096)
         except OSError as e:
             last_error = e
             continue
@@ -162,15 +167,41 @@ def query(
             last_error = DnsError("Réponse DNS trop courte")
             continue
 
-        resp_id, _flags, qdcount, ancount, _ns, _ar = struct.unpack("!HHHHHH", data[:12])
+        resp_id, flags, qdcount, ancount, _ns, _ar = struct.unpack("!HHHHHH", data[:12])
         if resp_id != txn_id:
             last_error = DnsError("ID de transaction DNS incohérent")
             continue
+        if not flags & 0x8000:  # QR : doit être une réponse, pas une requête
+            last_error = DnsError("Paquet DNS reçu qui n'est pas une réponse")
+            continue
+
+        rcode = flags & 0x000F
+        if rcode == 3:  # NXDOMAIN : le nom n'existe pas, ce n'est pas une erreur
+            return []
+        if rcode != 0:
+            last_error = DnsError(f"Le résolveur a répondu RCODE={rcode}")
+            continue
 
         offset = 12
-        for _ in range(qdcount):  # saute la section question
-            _, offset = _decode_name(data, offset)
-            offset += 4
+        try:
+            echoed_name, offset = _decode_name(data, offset) if qdcount else ("", 12)
+            if qdcount:
+                echoed_type = struct.unpack("!H", data[offset:offset + 2])[0]
+                offset += 4
+                # La question doit refléter la nôtre, sinon la réponse est forgée
+                # ou concerne une autre requête.
+                if echoed_name.lower().rstrip(".") != name.lower().rstrip("."):
+                    last_error = DnsError("La question renvoyée ne correspond pas")
+                    continue
+                if echoed_type != rtype:
+                    last_error = DnsError("Le type renvoyé ne correspond pas")
+                    continue
+            for _ in range(qdcount - 1):  # questions supplémentaires (rare)
+                _, offset = _decode_name(data, offset)
+                offset += 4
+        except (struct.error, IndexError, DnsError) as e:
+            last_error = DnsError(f"Section question illisible : {e}")
+            continue
 
         results: list[str] = []
         for _ in range(ancount):
@@ -180,9 +211,11 @@ def query(
                     "!HHIH", data[offset:offset + 10]
                 )
                 offset += 10
+                if rdlength > len(data) - offset:
+                    break  # rdlength mensonger : réponse tronquée ou forgée
                 value = _parse_rdata(rr_type, data, offset, rdlength)
                 offset += rdlength
-            except (struct.error, DnsError):
+            except (struct.error, IndexError, ValueError, DnsError):
                 break
             if value is not None and rr_type == rtype:
                 results.append(value)

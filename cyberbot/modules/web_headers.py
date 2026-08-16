@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from ..core.findings import Finding, Severity
+from ..core.scope import scope_guard
 from ..utils.net import http_request, parse_host
 
 NAME = "headers"
@@ -68,16 +69,19 @@ def run(target: str, ctx) -> list[Finding]:
     url = _normalize_url(target)
     findings: list[Finding] = []
 
+    guard = scope_guard(ctx)
     log.info(f"Requête HTTP vers {url}")
     try:
-        resp = http_request(url, timeout=ctx.options.get("http_timeout", 8.0))
+        resp = http_request(url, timeout=ctx.options.get("http_timeout", 8.0), is_allowed=guard)
     except Exception as e:  # noqa: BLE001
         # Repli en HTTP si HTTPS échoue.
         if url.startswith("https://"):
             fallback = "http://" + url[len("https://"):]
             log.warn(f"HTTPS échoué ({e}); tentative en {fallback}")
             try:
-                resp = http_request(fallback, timeout=ctx.options.get("http_timeout", 8.0))
+                resp = http_request(
+                    fallback, timeout=ctx.options.get("http_timeout", 8.0), is_allowed=guard
+                )
                 url = fallback
                 findings.append(
                     Finding(

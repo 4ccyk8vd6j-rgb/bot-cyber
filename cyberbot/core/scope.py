@@ -12,6 +12,7 @@ import json
 import socket
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 
 class ScopeError(Exception):
@@ -127,3 +128,15 @@ class Scope:
                 "Ajoutez-la au fichier de périmètre (config/scope.json) "
                 "uniquement si vous êtes autorisé à la tester."
             )
+
+
+def scope_guard(ctx) -> "Callable[[str], bool] | None":
+    """Extrait du contexte le contrôle de périmètre à appliquer aux redirections.
+
+    Retourne None si aucun périmètre n'est défini (le client HTTP ne filtrera
+    alors pas les sauts de redirection).
+    """
+    scope = getattr(ctx, "scope", None)
+    if scope is None:
+        return None
+    return scope.is_allowed

@@ -5,9 +5,16 @@ from __future__ import annotations
 import datetime as _dt
 import html
 import json
+import os
 from pathlib import Path
 
+from ..utils.sanitize import safe_url
 from .findings import FindingsCollection, Severity
+
+# Les rapports décrivent les faiblesses de l'infrastructure analysée :
+# ils ne doivent pas être lisibles par les autres utilisateurs de la machine.
+REPORT_FILE_MODE = 0o600
+REPORT_DIR_MODE = 0o700
 
 _SEV_EMOJI = {
     "critical": "🔴",
@@ -30,6 +37,36 @@ def _now() -> str:
     return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
 
 
+def _write_private(path: Path, content: str) -> Path:
+    """Écrit un rapport en le rendant lisible par son seul propriétaire.
+
+    Les permissions sont posées à la création (O_CREAT|O_EXCL puis fchmod
+    implicite via le mode d'ouverture) afin d'éviter toute fenêtre pendant
+    laquelle le fichier serait lisible par autrui.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(path.parent, REPORT_DIR_MODE)
+    except OSError:
+        pass  # Système de fichiers sans permissions POSIX (ex. montage Windows).
+
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, REPORT_FILE_MODE)
+    try:
+        fh = os.fdopen(fd, "w", encoding="utf-8")
+    except BaseException:
+        os.close(fd)  # fdopen n'a pas pris possession du descripteur.
+        raise
+    with fh:
+        fh.write(content)
+
+    # Un fichier préexistant conserve ses permissions malgré le mode d'open.
+    try:
+        os.chmod(path, REPORT_FILE_MODE)
+    except OSError:
+        pass
+    return path
+
+
 def write_json(findings: FindingsCollection, target: str, path: str | Path) -> Path:
     payload = {
         "scan_target": target,
@@ -39,9 +76,7 @@ def write_json(findings: FindingsCollection, target: str, path: str | Path) -> P
         "total_findings": len(findings),
         "findings": findings.to_list(),
     }
-    p = Path(path)
-    p.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
-    return p
+    return _write_private(Path(path), json.dumps(payload, indent=2, ensure_ascii=False))
 
 
 def write_markdown(findings: FindingsCollection, target: str, path: str | Path) -> Path:
@@ -84,14 +119,13 @@ def write_markdown(findings: FindingsCollection, target: str, path: str | Path) 
                 lines.append("  ```")
             if f.recommendation:
                 lines.append(f"- **Recommandation** : {f.recommendation}")
-            if f.references:
-                refs = ", ".join(f"[{r}]({r})" for r in f.references)
+            safe_refs = [u for u in (safe_url(r) for r in f.references) if u]
+            if safe_refs:
+                refs = ", ".join(f"[{u}]({u})" for u in safe_refs)
                 lines.append(f"- **Références** : {refs}")
             lines.append("")
 
-    p = Path(path)
-    p.write_text("\n".join(lines), encoding="utf-8")
-    return p
+    return _write_private(Path(path), "\n".join(lines))
 
 
 def write_html(findings: FindingsCollection, target: str, path: str | Path) -> Path:
@@ -109,8 +143,12 @@ def write_html(findings: FindingsCollection, target: str, path: str | Path) -> P
     cards = ""
     for i, f in enumerate(findings.items, start=1):
         color = _SEV_COLOR[f.severity.value]
+        # Double barrière : Finding filtre déjà les schémas, on revalide ici
+        # pour qu'aucun chemin d'écriture ne puisse produire un lien exécutable.
         refs = "".join(
-            f"<li><a href='{esc(r)}'>{esc(r)}</a></li>" for r in f.references
+            f"<li><a href='{esc(u)}' rel='noopener noreferrer nofollow'>{esc(u)}</a></li>"
+            for u in (safe_url(r) for r in f.references)
+            if u
         )
         refs_block = f"<ul class='refs'>{refs}</ul>" if refs else ""
         ev_block = (
@@ -136,6 +174,12 @@ def write_html(findings: FindingsCollection, target: str, path: str | Path) -> P
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Le rapport intègre des chaînes contrôlées par la cible analysée.
+     Cette CSP interdit tout script et toute ressource distante : même en
+     cas de défaut d'échappement, rien ne peut s'exécuter. -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
 <title>Rapport CyberBot — {esc(target)}</title>
 <style>
   :root {{ color-scheme: light dark; }}
@@ -176,9 +220,7 @@ def write_html(findings: FindingsCollection, target: str, path: str | Path) -> P
 </body>
 </html>"""
 
-    p = Path(path)
-    p.write_text(doc, encoding="utf-8")
-    return p
+    return _write_private(Path(path), doc)
 
 
 def write_all(
@@ -189,7 +231,7 @@ def write_all(
 ) -> dict[str, Path]:
     """Écrit les trois formats et retourne les chemins."""
     out = Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
+    out.mkdir(parents=True, exist_ok=True, mode=REPORT_DIR_MODE)
     stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     safe = (basename or target).replace("/", "_").replace(":", "_")
     base = f"{safe}-{stamp}"

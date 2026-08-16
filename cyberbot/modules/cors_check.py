@@ -8,38 +8,33 @@ contente d'observer les en-têtes de réponse.
 from __future__ import annotations
 
 from ..core.findings import Finding, Severity
-from ..utils.net import http_request, parse_host
+from ..core.scope import scope_guard
+from ..utils.net import http_request, parse_host, resolve_base_url
 
 NAME = "cors"
 
 EVIL_ORIGIN = "https://cyberbot-cors-test.example"
 
 
-def _normalize_url(target: str) -> str:
-    host, port, scheme = parse_host(target)
-    if scheme:
-        return target
-    return f"https://{host}:{port}" if port else f"https://{host}"
-
-
-def _probe(url: str, origin: str, timeout: float) -> dict[str, str]:
-    resp = http_request(url, headers={"Origin": origin}, timeout=timeout)
+def _probe(url: str, origin: str, timeout: float, guard=None) -> dict[str, str]:
+    resp = http_request(url, headers={"Origin": origin}, timeout=timeout, is_allowed=guard)
     return resp.headers
 
 
 def run(target: str, ctx) -> list[Finding]:
     log = ctx.logger
-    url = _normalize_url(target)
     timeout = ctx.options.get("http_timeout", 8.0)
     findings: list[Finding] = []
 
+    guard = scope_guard(ctx)
+    url = resolve_base_url(target, timeout=timeout, is_allowed=guard)
     host, _, _ = parse_host(url)
 
     log.info(f"Test de la configuration CORS sur {url}")
 
     # 1) Origine arbitraire : est-elle renvoyée telle quelle ?
     try:
-        headers = _probe(url, EVIL_ORIGIN, timeout)
+        headers = _probe(url, EVIL_ORIGIN, timeout, guard)
     except Exception as e:  # noqa: BLE001
         log.error(f"Requête CORS impossible : {e}")
         return findings
@@ -113,7 +108,7 @@ def run(target: str, ctx) -> list[Finding]:
 
     # 2) Sous-domaine « null » : origine null souvent acceptée à tort.
     try:
-        null_headers = _probe(url, "null", timeout)
+        null_headers = _probe(url, "null", timeout, guard)
         if null_headers.get("access-control-allow-origin", "").lower() == "null":
             sev = (
                 Severity.HIGH
@@ -142,7 +137,7 @@ def run(target: str, ctx) -> list[Finding]:
     if host:
         for candidate in (f"https://evil{host}", f"https://{host}.cyberbot-test.example"):
             try:
-                h = _probe(url, candidate, timeout)
+                h = _probe(url, candidate, timeout, guard)
             except Exception:  # noqa: BLE001
                 continue
             if h.get("access-control-allow-origin", "") == candidate:

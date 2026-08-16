@@ -7,6 +7,8 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 from typing import Any, Iterable
 
+from ..utils.sanitize import clean_text, safe_url
+
 
 class Severity(str, Enum):
     """Niveaux de sévérité, alignés sur les conventions CVSS."""
@@ -58,6 +60,30 @@ class Finding:
     timestamp: str = field(
         default_factory=lambda: _dt.datetime.now(_dt.timezone.utc).isoformat()
     )
+
+    # Limites de longueur par champ, pour éviter qu'une cible ne noie un rapport.
+    _LIMITS = {
+        "title": 300,
+        "target": 500,
+        "description": 4000,
+        "evidence": 8000,
+        "recommendation": 2000,
+    }
+
+    def __post_init__(self) -> None:
+        """Assainit systématiquement les champs alimentés par la cible.
+
+        Point de passage unique : aucun module ne peut oublier de nettoyer
+        une bannière ou un corps de réponse hostile.
+        """
+        for attr, limit in self._LIMITS.items():
+            value = getattr(self, attr)
+            keep_nl = attr in ("evidence", "description")
+            setattr(self, attr, clean_text(str(value), max_length=limit, keep_newlines=keep_nl))
+
+        # Seules les URL http(s) sont conservées : une référence 'javascript:'
+        # deviendrait un lien exécutable dans le rapport HTML.
+        self.references = [u for u in (safe_url(r) for r in self.references) if u]
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

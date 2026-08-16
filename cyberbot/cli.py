@@ -13,6 +13,7 @@ from .core.findings import FindingsCollection, Severity
 from .core.reporter import write_all
 from .core.scope import Scope, ScopeError
 from .utils.logging import Logger
+from .utils.net import ALLOWED_SCHEMES
 
 BANNER = r"""
    ____      _               ____        _
@@ -264,6 +265,18 @@ def main(argv: list[str] | None = None) -> int:
         log.warn("Contrôle de périmètre DÉSACTIVÉ — assurez-vous d'être autorisé sur la cible.")
 
     target = args.target
+
+    # Refus en amont d'une cible réseau exprimée dans un schéma non supporté
+    # (file://, ftp://…) : cela éviterait toute lecture locale déguisée en scan.
+    if has_active and "://" in target:
+        scheme = target.split("://", 1)[0].lower()
+        if scheme not in ALLOWED_SCHEMES:
+            log.error(
+                f"Schéma de cible non supporté : '{scheme}://'. "
+                f"Utilisez {' ou '.join(sorted(ALLOWED_SCHEMES))}."
+            )
+            return 2
+
     findings = _run_modules(module_names, target, ctx, require_scope)
 
     _print_summary(log, findings)

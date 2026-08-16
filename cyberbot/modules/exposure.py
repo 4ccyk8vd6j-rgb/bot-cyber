@@ -15,7 +15,8 @@ import re
 import time
 
 from ..core.findings import Finding, Severity
-from ..utils.net import http_request, parse_host
+from ..core.scope import scope_guard
+from ..utils.net import http_request, resolve_base_url
 
 NAME = "exposure"
 
@@ -52,19 +53,14 @@ SENSITIVE_PATHS: dict[str, tuple[str, Severity, str]] = {
 BENIGN = {"/.well-known/security.txt", "/robots.txt"}
 
 
-def _normalize_base(target: str) -> str:
-    host, port, scheme = parse_host(target)
-    if scheme:
-        return target.rstrip("/")
-    return (f"https://{host}:{port}" if port else f"https://{host}").rstrip("/")
-
-
 def run(target: str, ctx) -> list[Finding]:
     log = ctx.logger
-    base = _normalize_base(target)
     timeout = ctx.options.get("http_timeout", 8.0)
     delay = ctx.options.get("exposure_delay", 0.3)
     findings: list[Finding] = []
+
+    guard = scope_guard(ctx)
+    base = resolve_base_url(target, timeout=timeout, is_allowed=guard).rstrip("/")
 
     log.info(f"Vérification de {len(SENSITIVE_PATHS)} chemins sensibles sur {base}")
 
@@ -72,7 +68,10 @@ def run(target: str, ctx) -> list[Finding]:
     control = None
     try:
         control = http_request(
-            f"{base}/cyberbot-chemin-inexistant-9f3a2b", timeout=timeout, allow_redirects=False
+            f"{base}/cyberbot-chemin-inexistant-9f3a2b",
+            timeout=timeout,
+            allow_redirects=False,
+            is_allowed=guard,
         )
     except Exception as e:  # noqa: BLE001
         log.error(f"Cible injoignable : {e}")
@@ -97,7 +96,9 @@ def run(target: str, ctx) -> list[Finding]:
     for path, (label, sev, signature) in SENSITIVE_PATHS.items():
         time.sleep(delay)
         try:
-            resp = http_request(f"{base}{path}", timeout=timeout, allow_redirects=False)
+            resp = http_request(
+                f"{base}{path}", timeout=timeout, allow_redirects=False, is_allowed=guard
+            )
         except Exception as e:  # noqa: BLE001
             log.debug(f"{path} : {e}")
             continue
